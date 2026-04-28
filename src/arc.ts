@@ -506,150 +506,63 @@ export function listTabs(spaceNameOrId?: string): SpaceTabs | null {
   };
 }
 
+function escapeAppleScriptString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function runAppleScript(script: string): string {
+  return execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`).toString().trim();
+}
+
 export function addTab(
   spaceNameOrId: string,
-  url: string,
-  title?: string,
-  pinned: boolean = false
+  url: string
 ): { success: boolean; tabId?: string; error?: string } {
   try {
-    const data = loadSidebar();
-    createBackup();
-
-    // Find the space
-    const spaces = data.sidebar?.containers?.[1]?.spaces || [];
-    let spaceId: string | undefined;
-    let containerIds: string[] = [];
-
-    for (const item of spaces) {
-      if (typeof item === "object") {
-        if (item.id === spaceNameOrId || item.title === spaceNameOrId) {
-          spaceId = item.id;
-          containerIds = (item.containerIDs || []).filter((id) => id !== "pinned" && id !== "unpinned");
-          break;
-        }
-      }
-    }
-
-    if (!spaceId) {
+    const space = listSpaces().find((s) => s.id === spaceNameOrId || s.title === spaceNameOrId);
+    if (!space) {
       return { success: false, error: `Space not found: ${spaceNameOrId}` };
     }
 
-    // Get the appropriate container (pinned or unpinned)
-    const containerId = pinned ? containerIds[0] : containerIds[1];
-    if (!containerId) {
-      return { success: false, error: `Container not found for space: ${spaceId}` };
-    }
+    const safeTitle = escapeAppleScriptString(space.title);
+    const safeUrl = escapeAppleScriptString(url);
 
-    const tabId = randomUUID().toUpperCase();
-    const ts = Date.now() / 1000;
-    const deviceId = getDeviceId(data);
+    const script = `
+      tell application "Arc"
+        tell front window
+          set beforeIds to (id of every tab) as list
+          tell space "${safeTitle}"
+            make new tab with properties {URL:"${safeUrl}"}
+          end tell
+          set afterIds to (id of every tab) as list
+          repeat with idx from 1 to count of afterIds
+            set candidate to (item idx of afterIds) as string
+            if beforeIds does not contain candidate then return candidate
+          end repeat
+          error "Could not identify newly created tab"
+        end tell
+      end tell
+    `;
 
-    // Build tab object
-    const tabObj: ItemObject = {
-      id: tabId,
-      title: null,
-      parentID: containerId,
-      childrenIds: [],
-      createdAt: ts,
-      originatingDevice: deviceId,
-      isUnread: false,
-      data: {
-        tab: {
-          savedURL: url,
-          savedTitle: title || url,
-          savedMuteStatus: "allowAudio",
-          timeLastActiveAt: ts,
-        },
-      },
-    };
-
-    // Add to sidebar items
-    data.sidebar.containers[1].items = data.sidebar.containers[1].items || [];
-    data.sidebar.containers[1].items.push(tabId);
-    data.sidebar.containers[1].items.push(tabObj);
-
-    // Update container's childrenIds
-    const items = data.sidebar.containers[1].items;
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (typeof item === "object" && item.id === containerId) {
-        item.childrenIds = item.childrenIds || [];
-        item.childrenIds.push(tabId);
-        break;
-      }
-    }
-
-    // Add to syncData.items
-    const syncData = data.firebaseSyncState?.syncData;
-    if (syncData?.items) {
-      syncData.items.push(tabId);
-      syncData.items.push({
-        id: tabId,
-        lastChangeDate: ts,
-        lastChangedDevice: deviceId,
-        value: tabObj,
-      });
-    }
-
-    saveSidebar(data);
+    const tabId = runAppleScript(script);
     return { success: true, tabId };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
+function findTabIndex(tabId: string): number {
+  const out = runAppleScript(`tell application "Arc" to tell front window to return (id of every tab) as list`);
+  const ids = out ? out.split(", ") : [];
+  const i = ids.indexOf(tabId);
+  return i < 0 ? -1 : i + 1;
+}
+
 export function deleteTab(tabId: string): { success: boolean; error?: string } {
   try {
-    const data = loadSidebar();
-    createBackup();
-
-    // Find the tab and its parent
-    const items = data.sidebar?.containers?.[1]?.items || [];
-    let parentId: string | undefined;
-    let found = false;
-
-    for (const item of items) {
-      if (typeof item === "object" && item.id === tabId) {
-        parentId = item.parentID || undefined;
-        found = true;
-        break;
-      }
-    }
-
-    if (!found) {
-      return { success: false, error: `Tab not found: ${tabId}` };
-    }
-
-    // Remove from sidebar items
-    const newItems: Array<string | ItemObject> = [];
-    for (const item of items) {
-      if (typeof item === "string" && item === tabId) continue;
-      if (typeof item === "object" && item.id === tabId) continue;
-      newItems.push(item);
-    }
-    data.sidebar.containers[1].items = newItems;
-
-    // Remove from parent's childrenIds
-    if (parentId) {
-      for (const item of data.sidebar.containers[1].items) {
-        if (typeof item === "object" && item.id === parentId && item.childrenIds) {
-          item.childrenIds = item.childrenIds.filter((id) => id !== tabId);
-          break;
-        }
-      }
-    }
-
-    // Remove from syncData.items
-    const syncData = data.firebaseSyncState?.syncData;
-    if (syncData?.items) {
-      syncData.items = syncData.items.filter((item) => {
-        if (typeof item === "string") return item !== tabId;
-        return item.id !== tabId;
-      });
-    }
-
-    saveSidebar(data);
+    const idx = findTabIndex(tabId);
+    if (idx < 0) return { success: false, error: `Tab not found: ${tabId}` };
+    runAppleScript(`tell application "Arc" to tell front window to close tab ${idx}`);
     return { success: true };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -694,29 +607,3 @@ export function openUrl(url: string, spaceNameOrId?: string): { success: boolean
   }
 }
 
-export function createWorkspace(
-  name: string,
-  urls: Array<{ url: string; title?: string }>,
-  icon: string = "🔧"
-): { success: boolean; spaceId?: string; tabIds?: string[]; error?: string } {
-  // Create the space first
-  const spaceResult = createSpace(name, icon);
-  if (!spaceResult.success || !spaceResult.spaceId) {
-    return { success: false, error: spaceResult.error || "Failed to create space" };
-  }
-
-  // Add tabs to the space
-  const tabIds: string[] = [];
-  for (const { url, title } of urls) {
-    const tabResult = addTab(spaceResult.spaceId, url, title, false);
-    if (tabResult.success && tabResult.tabId) {
-      tabIds.push(tabResult.tabId);
-    }
-  }
-
-  return {
-    success: true,
-    spaceId: spaceResult.spaceId,
-    tabIds,
-  };
-}

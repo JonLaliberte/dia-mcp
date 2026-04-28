@@ -12,7 +12,6 @@ import {
   addTab,
   deleteTab,
   openUrl,
-  createWorkspace,
 } from "./arc.js";
 
 const server = new McpServer({
@@ -172,21 +171,19 @@ server.tool(
 // Tool: Add tab
 server.tool(
   "add_tab",
-  "Add a new tab to an Arc browser space. Requires Arc restart to see in sidebar. For immediate opening, use open_url instead.",
+  "Add a new tab to an Arc browser space (uses AppleScript). Takes effect immediately, no restart needed. Tab is added unpinned; pin manually in Arc with Cmd+D if needed.",
   {
     space: z.string().describe("Name or ID of the space to add the tab to"),
     url: z.string().url().describe("URL for the new tab"),
-    title: z.string().optional().describe("Title for the tab (defaults to URL)"),
-    pinned: z.boolean().optional().default(false).describe("Whether to add as a pinned tab"),
   },
-  async ({ space, url, title, pinned }) => {
-    const result = addTab(space, url, title, pinned);
+  async ({ space, url }) => {
+    const result = addTab(space, url);
     if (result.success) {
       return {
         content: [
           {
             type: "text",
-            text: `Tab added successfully (ID: ${result.tabId}). Restart Arc to see the tab in the sidebar.`,
+            text: `Tab added (ID: ${result.tabId}).`,
           },
         ],
       };
@@ -206,9 +203,9 @@ server.tool(
 // Tool: Delete tab
 server.tool(
   "delete_tab",
-  "Delete a tab from Arc browser by its ID. Requires Arc restart to take effect.",
+  "Close a tab in Arc browser by its ID (uses AppleScript). Takes effect immediately.",
   {
-    tabId: z.string().describe("ID of the tab to delete"),
+    tabId: z.string().describe("ID of the tab to close"),
   },
   async ({ tabId }) => {
     const result = deleteTab(tabId);
@@ -217,7 +214,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Tab deleted successfully. Restart Arc to see the changes.`,
+            text: `Tab closed.`,
           },
         ],
       };
@@ -226,7 +223,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Failed to delete tab: ${result.error}`,
+            text: `Failed to close tab: ${result.error}`,
           },
         ],
       };
@@ -259,46 +256,6 @@ server.tool(
           {
             type: "text",
             text: `Failed to open URL: ${result.error}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Tool: Create workspace
-server.tool(
-  "create_workspace",
-  "Create a new workspace (space + tabs) in one command. Useful for setting up a focused context for a ticket or task. Requires Arc restart.",
-  {
-    name: z.string().describe("Name of the workspace (e.g., ticket ID like 'TELLA-4320')"),
-    urls: z
-      .array(
-        z.object({
-          url: z.string().url().describe("URL to add"),
-          title: z.string().optional().describe("Optional title for the tab"),
-        })
-      )
-      .describe("List of URLs to open in the workspace"),
-    icon: z.string().optional().default("🔧").describe("Icon for the space (emoji or SF Symbol)"),
-  },
-  async ({ name, urls, icon }) => {
-    const result = createWorkspace(name, urls, icon);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Workspace "${name}" created with ${result.tabIds?.length || 0} tabs (Space ID: ${result.spaceId}). Restart Arc to see it.`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to create workspace: ${result.error}`,
           },
         ],
       };
