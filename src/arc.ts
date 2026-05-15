@@ -510,6 +510,14 @@ function escapeAppleScriptString(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+// Arc wraps execute-javascript string results in "..." with \" for inner quotes.
+function unquoteJsResult(s: string): string {
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+  return s;
+}
+
 function runAppleScript(script: string): string {
   return execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`).toString().trim();
 }
@@ -564,6 +572,87 @@ export function deleteTab(tabId: string): { success: boolean; error?: string } {
     if (idx < 0) return { success: false, error: `Tab not found: ${tabId}` };
     runAppleScript(`tell application "Arc" to tell front window to close tab ${idx}`);
     return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export function getActiveTab(): { success: boolean; tab?: { id: string; title: string; url: string }; error?: string } {
+  try {
+    // Accessing properties of a stored `active tab` specifier fails with -1700 in Arc.
+    // Use JS injection for URL/title (always works), then match against the tab list for the ID.
+    const url = unquoteJsResult(runAppleScript(
+      `tell application "Arc" to tell front window to execute active tab javascript "window.location.href"`
+    ));
+    const title = unquoteJsResult(runAppleScript(
+      `tell application "Arc" to tell front window to execute active tab javascript "document.title"`
+    ));
+    const idsRaw = runAppleScript(
+      `tell application "Arc" to tell front window to return (id of every tab) as list`
+    );
+    const urlsRaw = runAppleScript(
+      `tell application "Arc" to tell front window to return (URL of every tab) as list`
+    );
+    const ids = idsRaw ? idsRaw.split(", ") : [];
+    const urls = urlsRaw ? urlsRaw.split(", ") : [];
+    const idx = urls.indexOf(url);
+    const id = idx >= 0 ? ids[idx] : "";
+    return { success: true, tab: { id, title, url } };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+const MARKDOWN_JS =
+  `(function(){var NL=String.fromCharCode(10);var B3=String.fromCharCode(96,96,96);` +
+  `function t(n){if(!n)return '';if(n.nodeType===3)return n.textContent;if(n.nodeType!==1)return '';` +
+  `var g=n.tagName.toLowerCase();` +
+  `if(['script','style','nav','aside','noscript','footer','header'].indexOf(g)>=0)return '';` +
+  `var c=Array.from(n.childNodes).map(t).join('');` +
+  `if(g==='h1')return NL+'# '+c.trim()+NL;` +
+  `if(g==='h2')return NL+'## '+c.trim()+NL;` +
+  `if(g==='h3')return NL+'### '+c.trim()+NL;` +
+  `if(g==='h4')return NL+'#### '+c.trim()+NL;` +
+  `if(g==='h5')return NL+'##### '+c.trim()+NL;` +
+  `if(g==='h6')return NL+'###### '+c.trim()+NL;` +
+  `if(g==='p')return NL+c.trim()+NL;` +
+  `if(g==='br')return NL;` +
+  `if(g==='hr')return NL+'---'+NL;` +
+  `if(g==='strong'||g==='b')return '**'+c.trim()+'**';` +
+  `if(g==='em'||g==='i')return '*'+c.trim()+'*';` +
+  `if(g==='code')return n.parentElement&&n.parentElement.tagName==='PRE'?c:String.fromCharCode(96)+c+String.fromCharCode(96);` +
+  `if(g==='pre')return NL+B3+NL+n.textContent.trim()+NL+B3+NL;` +
+  `if(g==='a'&&n.href)return '['+c+']('+n.href+')';` +
+  `if(g==='li')return '- '+c.trim()+NL;` +
+  `if(g==='ul'||g==='ol')return NL+c+NL;` +
+  `if(g==='blockquote')return c.split(NL).map(function(l){return '> '+l;}).join(NL);` +
+  `if(g==='img')return n.alt?'!['+n.alt+']('+n.src+')':'';` +
+  `return c;}` +
+  `var r=document.querySelector('main,article,[role="main"]')||document.body;` +
+  `var m=t(r);var prev='';` +
+  `while(prev!==m){prev=m;m=m.split(NL+NL+NL).join(NL+NL);}` +
+  `m=m.trim();` +
+  `return m.length>50000?m.substring(0,50000)+NL+'...(truncated)':m;` +
+  `})()`;
+
+export function getTabContent(
+  format: "markdown" | "text" | "html" = "markdown"
+): { success: boolean; content?: string; error?: string } {
+  try {
+    let js: string;
+    if (format === "text") {
+      js = `(document.querySelector('main,article,[role="main"]')||document.body).innerText`;
+    } else if (format === "html") {
+      js = `(document.querySelector('main,article,[role="main"]')||document.body).innerHTML`;
+    } else {
+      js = MARKDOWN_JS;
+    }
+
+    const safeJs = escapeAppleScriptString(js);
+    const raw = runAppleScript(
+      `tell application "Arc" to tell front window to execute active tab javascript "${safeJs}"`
+    );
+    return { success: true, content: unquoteJsResult(raw) };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }

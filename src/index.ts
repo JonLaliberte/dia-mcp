@@ -12,6 +12,8 @@ import {
   addTab,
   deleteTab,
   openUrl,
+  getActiveTab,
+  getTabContent,
 } from "./arc.js";
 
 const server = new McpServer({
@@ -226,6 +228,50 @@ server.tool(
             text: `Failed to close tab: ${result.error}`,
           },
         ],
+      };
+    }
+  }
+);
+
+// Tool: Get active tab
+server.tool(
+  "get_active_tab",
+  "Get the ID, title, and URL of the active tab in Arc's front window (uses AppleScript).",
+  {},
+  async () => {
+    const result = getActiveTab();
+    if (result.success) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(result.tab, null, 2) }],
+      };
+    } else {
+      return {
+        content: [{ type: "text", text: `Failed to get active tab: ${result.error}` }],
+      };
+    }
+  }
+);
+
+// Tool: Get tab content
+server.tool(
+  "get_tab_content",
+  "Get the content of the active tab in Arc's front window by injecting JavaScript. Returns markdown by default (strips nav/footer/aside), or plain text or raw HTML.",
+  {
+    format: z
+      .enum(["markdown", "text", "html"])
+      .optional()
+      .default("markdown")
+      .describe("Output format: markdown (default), text (innerText), or html (innerHTML)"),
+  },
+  async ({ format }) => {
+    const result = getTabContent(format);
+    if (result.success) {
+      return {
+        content: [{ type: "text", text: result.content ?? "" }],
+      };
+    } else {
+      return {
+        content: [{ type: "text", text: `Failed to get tab content: ${result.error}` }],
       };
     }
   }
