@@ -1,20 +1,19 @@
 #!/usr/bin/env node
-import { execSync } from "child_process";
-import { listSpaces, addTab, deleteTab } from "./src/arc.js";
+import { listProfiles, listTabs, addTab, deleteTab, getActiveTab } from "./src/dia.js";
 
-const spaceArg = process.argv[2];
-if (!spaceArg) {
-  console.error("usage: npx tsx test.ts <space-name-or-id>");
-  console.error("  uses the given space as a throwaway target — tabs will be added and deleted");
+const profileArg = process.argv[2];
+if (!profileArg) {
+  console.error("usage: npx tsx test.ts <profile-name>");
+  console.error("  uses the given profile as a throwaway target — tabs will be added and closed");
   process.exit(1);
 }
 
-const target = listSpaces().find((s) => s.id === spaceArg || s.title === spaceArg);
+const target = listProfiles().find((p) => p.name === profileArg);
 if (!target) {
-  console.error(`space not found: ${spaceArg}`);
+  console.error(`profile not found: ${profileArg}`);
   process.exit(1);
 }
-console.log(`testing against space: "${target.title}" (${target.id})\n`);
+console.log(`testing against profile: "${target.name}"\n`);
 
 let pass = 0;
 let fail = 0;
@@ -35,46 +34,56 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
 }
 
-function osa(script: string): string {
-  return execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`).toString().trim();
+function tabIds(): string[] {
+  const r = listTabs(target.name);
+  assert(r.success, `listTabs failed: ${!r.success && r.error}`);
+  return r.tabs.map((t) => t.id);
 }
 
-function windowTabIds(): string[] {
-  const out = osa(`tell application "Arc" to tell front window to return (id of every tab) as list`);
-  return out ? out.split(", ") : [];
+// Dia closes tabs asynchronously, a moment after the close command returns.
+function waitUntilGone(tabId: string): boolean {
+  for (let i = 0; i < 20; i++) {
+    if (!tabIds().includes(tabId)) return true;
+    Bun.sleepSync(100);
+  }
+  return false;
 }
+
+function addAndClose(url: string) {
+  const r = addTab(url, target.name);
+  assert(r.success, `addTab failed: ${!r.success && r.error}`);
+  const d = deleteTab(r.tabId);
+  assert(d.success, `deleteTab failed: ${!d.success && d.error}`);
+  assert(waitUntilGone(r.tabId), "tab still present after delete");
+}
+
+check("listProfiles marks exactly one active profile", () => {
+  assert(listProfiles().filter((p) => p.active).length === 1, "expected one active profile");
+});
 
 check("round-trip add + delete", () => {
-  const r = addTab(target.title, "https://example.com/round-trip");
-  assert(r.success && r.tabId, `addTab failed: ${r.error}`);
-  assert(windowTabIds().includes(r.tabId), "tab missing after add");
+  const r = addTab("https://example.com/round-trip", target.name);
+  assert(r.success, `addTab failed: ${!r.success && r.error}`);
+  assert(r.profile === target.name, `tab landed in "${r.profile}"`);
+  assert(tabIds().includes(r.tabId), "tab missing after add");
   const d = deleteTab(r.tabId);
-  assert(d.success, `deleteTab failed: ${d.error}`);
-  assert(!windowTabIds().includes(r.tabId), "tab still present after delete");
+  assert(d.success, `deleteTab failed: ${!d.success && d.error}`);
+  assert(waitUntilGone(r.tabId), "tab still present after delete");
 });
 
-check("space lookup by ID works", () => {
-  const r = addTab(target.id, "https://example.com/by-id");
-  assert(r.success && r.tabId, `addTab by ID failed: ${r.error}`);
-  deleteTab(r.tabId);
+check("URL with single quote in path", () => addAndClose("https://example.com/it's-fine?a=1"));
+
+check("URL with double quote in query", () => addAndClose('https://example.com/?q="hello"'));
+
+check("getActiveTab returns a tab with an ID", () => {
+  const r = getActiveTab();
+  assert(r.success && r.tab.id, `getActiveTab failed: ${!r.success && r.error}`);
 });
 
-check("URL with single quote in path", () => {
-  const r = addTab(target.title, "https://example.com/it's-fine?a=1");
-  assert(r.success && r.tabId, `addTab failed: ${r.error}`);
-  deleteTab(r.tabId);
-});
-
-check("URL with double quote in query", () => {
-  const r = addTab(target.title, 'https://example.com/?q="hello"');
-  assert(r.success && r.tabId, `addTab failed: ${r.error}`);
-  deleteTab(r.tabId);
-});
-
-check("addTab to nonexistent space returns error", () => {
-  const r = addTab("__definitely_not_a_real_space__", "https://example.com");
+check("addTab to nonexistent profile returns error", () => {
+  const r = addTab("https://example.com", "__definitely_not_a_real_profile__");
   assert(!r.success, "expected failure");
-  assert(r.error?.includes("not found"), `expected 'not found' error, got: ${r.error}`);
+  assert(r.error.includes("not found"), `expected 'not found' error, got: ${r.error}`);
 });
 
 check("deleteTab with bogus ID returns error", () => {

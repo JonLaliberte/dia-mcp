@@ -1,18 +1,24 @@
 {
-  "name": "arc-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for Arc browser - manage spaces and tabs",
+  "name": "dia-mcp",
+  "version": "2.0.0",
+  "description": "MCP server for Dia browser - manage profiles and tabs",
   "main": "src/index.ts",
   "type": "module",
   "bin": {
-    "arc-mcp": "./src/index.ts"
+    "dia-mcp": "./src/index.ts"
   },
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
     "dev": "tsx watch src/index.ts"
   },
-  "keywords": ["mcp", "arc", "browser", "spaces", "tabs"],
+  "keywords": [
+    "mcp",
+    "dia",
+    "browser",
+    "profiles",
+    "tabs"
+  ],
   "author": "Michiel Westerbeek",
   "license": "MIT",
   "dependencies": {

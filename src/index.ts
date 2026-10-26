@@ -4,258 +4,126 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
-  listSpaces,
-  createSpace,
-  deleteSpace,
-  focusSpace,
+  listProfiles,
+  focusProfile,
   listTabs,
   addTab,
   deleteTab,
-  openUrl,
   getActiveTab,
   getTabContent,
-} from "./arc.js";
+} from "./dia.js";
 
 const server = new McpServer({
-  name: "arc-mcp",
-  version: "1.0.0",
+  name: "dia-mcp",
+  version: "2.0.0",
 });
 
-// Tool: List spaces
+function text(t: string) {
+  return { content: [{ type: "text" as const, text: t }] };
+}
+
+// Tool: List profiles
 server.tool(
-  "list_spaces",
-  "List all Arc browser spaces",
+  "list_profiles",
+  "List the Dia browser profiles in the front window, in sidebar order, marking the active one.",
   {},
   async () => {
-    const spaces = listSpaces();
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(spaces, null, 2),
-        },
-      ],
-    };
-  }
-);
-
-// Tool: Create space
-server.tool(
-  "create_space",
-  "Create a new Arc browser space. Requires Arc restart to take effect. Note: Arc sync must be disabled for changes to persist.",
-  {
-    name: z.string().describe("Name of the new space"),
-    icon: z
-      .string()
-      .optional()
-      .default("star")
-      .describe("Icon for the space - an emoji (e.g., '🚀') or SF Symbol name (e.g., 'star.fill')"),
-  },
-  async ({ name, icon }) => {
-    const result = createSpace(name, icon);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Space "${name}" created successfully (ID: ${result.spaceId}). Restart Arc to see the new space.`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to create space: ${result.error}`,
-          },
-        ],
-      };
+    try {
+      return text(JSON.stringify(listProfiles(), null, 2));
+    } catch (error) {
+      return text(`Failed to list profiles: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 );
 
-// Tool: Delete space
+// Tool: Focus profile
 server.tool(
-  "delete_space",
-  "Delete an Arc browser space by name or ID. Requires Arc restart to take effect.",
+  "focus_profile",
+  "Switch Dia's front window to a profile by name.",
   {
-    space: z.string().describe("Name or ID of the space to delete"),
+    profile: z.string().describe("Name of the profile to focus"),
   },
-  async ({ space }) => {
-    const result = deleteSpace(space);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Space "${space}" deleted successfully. Restart Arc to see the changes.`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to delete space: ${result.error}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Tool: Focus space
-server.tool(
-  "focus_space",
-  "Switch to a specific Arc browser space (uses AppleScript)",
-  {
-    space: z.string().describe("Name or ID of the space to focus"),
-  },
-  async ({ space }) => {
-    const result = focusSpace(space);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Switched to space "${space}"`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to focus space: ${result.error}`,
-          },
-        ],
-      };
-    }
+  async ({ profile }) => {
+    const result = focusProfile(profile);
+    return text(result.success ? `Switched to profile "${profile}"` : `Failed to focus profile: ${result.error}`);
   }
 );
 
 // Tool: List tabs
 server.tool(
   "list_tabs",
-  "List tabs and folders in an Arc browser space with full hierarchy. Shows pinned and unpinned sections with nested folders.",
+  "List the tabs in a Dia profile (ID, title, URL). Favorites, pinned tabs and normal tabs are listed together in that order; Dia doesn't expose folders or a reliable pinned flag.",
   {
-    space: z
-      .string()
-      .optional()
-      .describe("Name or ID of the space to list tabs from (optional, defaults to first space)"),
+    profile: z.string().optional().describe("Name of the profile (optional, defaults to the active profile)"),
   },
-  async ({ space }) => {
-    const result = listTabs(space);
-    if (!result) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: space ? `Space not found: ${space}` : "No spaces found",
-          },
-        ],
-      };
-    }
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
+  async ({ profile }) => {
+    const result = listTabs(profile);
+    if (!result.success) return text(`Failed to list tabs: ${result.error}`);
+    const { success, ...tabs } = result;
+    return text(JSON.stringify(tabs, null, 2));
   }
 );
 
 // Tool: Add tab
 server.tool(
   "add_tab",
-  "Add a new tab to an Arc browser space (uses AppleScript). Takes effect immediately, no restart needed. Tab is added unpinned; pin manually in Arc with Cmd+D if needed.",
+  "Open a URL in a new Dia tab, in the given profile or the active one. Takes effect immediately.",
   {
-    space: z.string().describe("Name or ID of the space to add the tab to"),
     url: z.string().url().describe("URL for the new tab"),
+    profile: z.string().optional().describe("Name of the profile to add the tab to (optional, defaults to the active profile)"),
   },
-  async ({ space, url }) => {
-    const result = addTab(space, url);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Tab added (ID: ${result.tabId}).`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to add tab: ${result.error}`,
-          },
-        ],
-      };
-    }
+  async ({ url, profile }) => {
+    const result = addTab(url, profile);
+    return text(
+      result.success
+        ? `Opened ${url} in profile "${result.profile}" (tab ID: ${result.tabId}).`
+        : `Failed to add tab: ${result.error}`
+    );
+  }
+);
+
+// Tool: Open URL
+server.tool(
+  "open_url",
+  "Open a URL in Dia immediately, in the given profile or the active one.",
+  {
+    url: z.string().url().describe("URL to open"),
+    profile: z.string().optional().describe("Name of the profile to open the URL in (optional)"),
+  },
+  async ({ url, profile }) => {
+    const result = addTab(url, profile);
+    return text(result.success ? `Opened ${url} in profile "${result.profile}"` : `Failed to open URL: ${result.error}`);
   }
 );
 
 // Tool: Delete tab
 server.tool(
   "delete_tab",
-  "Close a tab in Arc browser by its ID (uses AppleScript). Takes effect immediately.",
+  "Close a Dia tab by its ID, in any profile of the front window. Takes effect immediately.",
   {
     tabId: z.string().describe("ID of the tab to close"),
   },
   async ({ tabId }) => {
     const result = deleteTab(tabId);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Tab closed.`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to close tab: ${result.error}`,
-          },
-        ],
-      };
-    }
+    return text(result.success ? "Tab closed." : `Failed to close tab: ${result.error}`);
   }
 );
 
 // Tool: Get active tab
 server.tool(
   "get_active_tab",
-  "Get the ID, title, and URL of the active tab in Arc's front window (uses AppleScript).",
+  "Get the ID, title, URL and profile of the active tab in Dia's front window.",
   {},
   async () => {
     const result = getActiveTab();
-    if (result.success) {
-      return {
-        content: [{ type: "text", text: JSON.stringify(result.tab, null, 2) }],
-      };
-    } else {
-      return {
-        content: [{ type: "text", text: `Failed to get active tab: ${result.error}` }],
-      };
-    }
+    return text(result.success ? JSON.stringify(result.tab, null, 2) : `Failed to get active tab: ${result.error}`);
   }
 );
 
 // Tool: Get tab content
 server.tool(
   "get_tab_content",
-  "Get the content of the active tab in Arc's front window by injecting JavaScript. Returns markdown by default (strips nav/footer/aside), or plain text or raw HTML.",
+  "Get the content of the active tab in Dia's front window by injecting JavaScript. Returns markdown by default (strips nav/footer/aside), or plain text or raw HTML. Requires Dia to be launched with --enable-applescript-javascript.",
   {
     format: z
       .enum(["markdown", "text", "html"])
@@ -265,54 +133,14 @@ server.tool(
   },
   async ({ format }) => {
     const result = getTabContent(format);
-    if (result.success) {
-      return {
-        content: [{ type: "text", text: result.content ?? "" }],
-      };
-    } else {
-      return {
-        content: [{ type: "text", text: `Failed to get tab content: ${result.error}` }],
-      };
-    }
-  }
-);
-
-// Tool: Open URL
-server.tool(
-  "open_url",
-  "Open a URL in Arc browser immediately (uses AppleScript). Optionally specify a space.",
-  {
-    url: z.string().url().describe("URL to open"),
-    space: z.string().optional().describe("Name or ID of the space to open the URL in (optional)"),
-  },
-  async ({ url, space }) => {
-    const result = openUrl(url, space);
-    if (result.success) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: space ? `Opened ${url} in space "${space}"` : `Opened ${url}`,
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to open URL: ${result.error}`,
-          },
-        ],
-      };
-    }
+    return text(result.success ? result.content : `Failed to get tab content: ${result.error}`);
   }
 );
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Arc MCP server running on stdio");
+  console.error("Dia MCP server running on stdio");
 }
 
 main().catch((error) => {
